@@ -30,7 +30,7 @@ The Simulated Annealing (SA) metaheuristic was chosen to solve this combinatoria
   - **Move Acceptance:**
       - Moves that improve the cost function are always accepted.
       - Moves that worsen the cost function are accepted with a probability that depends on the current control parameter (`T`) and the degradation (`ΔE`) of the objective function.
-  - **Control Parameter (Temperature \`\`\` T \`\`\`):** Determines the probability of accepting non-improving solutions. Decreases gradually according to a **cooling schedule**.
+  - **Control Parameter (Temperature `T`):** Determines the probability of accepting non-improving solutions. Decreases gradually according to a **cooling schedule**.
   - **Cooling Schedule:** Defines the temperature at each step of the algorithm and has a great impact on SA's performance. It includes:
       - **Initial Temperature:** Should be high enough to allow moves to almost any neighboring state, but not so high as to conduct a random search for too long.
       - **Equilibrium State:** A sufficient number of transitions (moves) must be applied at each temperature to reach an equilibrium state.
