@@ -1,11 +1,11 @@
 # [M.EGI018] Capacity-Pricing Model - Simulated Annealing
 
 **Author(s):**  
-XXX | upXXXXXXXX
-XXX | upXXXXXXXX
-Matheus Fernandes Vilhena Campinho | 202202004
-XXX | upXXXXXXXX
-XXX | upXXXXXXXX
+XXX | upXXXXXXXX  
+XXX | upXXXXXXXX  
+Matheus Fernandes Vilhena Campinho | 202202004  
+XXX | upXXXXXXXX  
+XXX | upXXXXXXXX  
 
 **Project Description**
 
