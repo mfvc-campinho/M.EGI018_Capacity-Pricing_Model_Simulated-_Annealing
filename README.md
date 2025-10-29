@@ -1,1 +1,1 @@
-# M.EGI018_Capacity-Pricing_Model_Simulated-_Annealing
+# [M.EGI018] Capacity-Pricing Model - Simulated Annealing
