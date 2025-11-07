@@ -57,5 +57,7 @@
   "terminal.integrated.fontSize": 12,
   "python.formatting.provider": "none",
   "python.linting.flake8Enabled": false,
-  "python.linting.mypyEnabled": false
+  "python.linting.mypyEnabled": false,
+  "python-envs.defaultEnvManager": "ms-python.python:system",
+  "python-envs.pythonProjects": []
 }
