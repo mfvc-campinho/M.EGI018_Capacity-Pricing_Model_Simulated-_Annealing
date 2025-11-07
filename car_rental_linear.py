@@ -163,7 +163,7 @@ def solve_instance(filename):
         # =================SOLVE=================
         print(f"\n[Gurobi Output for {filename} follows...]")
         opt = SolverFactory('gurobi')
-        # opt.options['TimeLimit'] = 60  # 60 seconds per instance
+        opt.options['TimeLimit'] = 600  # 600 seconds per instance
         
         # Tee=True enabled for verbose output during solve
         res = opt.solve(model, tee=True) 
@@ -199,7 +199,7 @@ def solve_instance(filename):
 # ==============================================================================
 # BATCH LOOP
 # ==============================================================================
-RESULTS_FILE = "BatchResults.xlsx"
+# RESULTS_FILE = "BatchResults_2.xlsx"
 results = []
 
 print("Starting batch run...")
