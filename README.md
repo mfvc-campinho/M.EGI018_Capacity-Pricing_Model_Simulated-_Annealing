@@ -2,7 +2,7 @@
 
 **Author(s):**  
 XXX | upXXXXXXXX  
-XXX | upXXXXXXXX  
+João Pedro de Lima Silveira | up202503099  
 Matheus Fernandes Vilhena Campinho | 202202004  
 XXX | upXXXXXXXX  
 XXX | upXXXXXXXX  
