@@ -1,6 +1,7 @@
 # [M.EGI018] Capacity-Pricing Model - Simulated Annealing
 
 **Author(s):**  
+
 Daniel Pereira | up202107356  
 João Pedro de Lima Silveira | up202503099  
 XXX | upXXXXXXXX  
