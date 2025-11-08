@@ -1,10 +1,11 @@
-<img width="275" height="70" alt="image" src="https://github.com/user-attachments/assets/20451390-094b-4e3c-8cf9-6fe88ccd5c3c" />
+# [M.EGI018] Capacity-Pricing Model - Simulated Annealing
+
 **Author(s):**  
-Daniel Pereira | up202107356  
+Daniel Pereira  | up202107356  
 João Pedro de Lima Silveira | up202503099  
 XXX | upXXXXXXXX  
 Matheus Fernandes Vilhena Campinho | 202202004  
-Rui Rodrigues | up202105516   
+Rui Rodrigues  | Rui Rodrigues – up202105516
 
 **Project Description**
 
