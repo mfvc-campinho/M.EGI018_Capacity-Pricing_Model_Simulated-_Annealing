@@ -1,11 +1,11 @@
 # [M.EGI018] Capacity-Pricing Model - Simulated Annealing
 
 **Author(s):**  
-Daniel Pereira  | up202107356  
+Daniel Pereira | up202107356  
 João Pedro de Lima Silveira | up202503099  
 XXX | upXXXXXXXX  
 Matheus Fernandes Vilhena Campinho | 202202004  
-Rui Rodrigues  | Rui Rodrigues – up202105516
+Rui Rodrigues | up202105516
 
 **Project Description**
 
