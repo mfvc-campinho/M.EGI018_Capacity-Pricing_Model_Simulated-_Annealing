@@ -167,6 +167,7 @@ def solve_instance(filename):
         model.obj = Objective(sense=maximize, rule=lambda m:
                               # Linearized Revenue
                               sum(m.v[r, a, p] * PRI_pg[p, rental_gr[r]] for r in m.R for a in m.A for p in m.P) -
+                              # Buying Costs
                               (sum(m.w_O[g, s]*COS_g[g] for g in m.G for s in m.S) +
                                   # Leasing Costs
                                   sum(m.f_L[g, t]*LEA_g[g] for g in m.G for t in m.T_minus) +
@@ -174,7 +175,8 @@ def solve_instance(filename):
                                   sum(m.f_O[g, t]*OWN_g[g] for g in m.G for t in m.T_minus) +
                                # Transfer Costs
                                sum((m.y_L[s1, s2, g, t] + m.y_O[s1, s2, g, t]) * TC_gs1s2[g, s1, s2] for s1 in m.S for s2 in m.S for g in m.G for t in m.T_minus) +
-                                  sum((m.u_L[r, a, g]+m.u_O[r, a, g])*PYU for g in m.G for r in m.R for a in m.A if rental_gr[r] != g)))  # Upgrade Penalty
+                                  # Upgrade Penalty
+                                  sum((m.u_L[r, a, g]+m.u_O[r, a, g])*PYU for g in m.G for r in m.R for a in m.A if rental_gr[r] != g)))
 
         # ----- Constraints -----
         model.c1 = Constraint(model.R, model.A, rule=lambda m, r, a: m.U[r, a] == sum(
