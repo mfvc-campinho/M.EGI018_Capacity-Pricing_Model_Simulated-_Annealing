@@ -158,10 +158,10 @@ def solve_instance(filename):
                         model.T_minus, domain=NonNegativeIntegers)
         model.u_L = Var(model.R, model.A, model.G, domain=NonNegativeIntegers)
         model.u_O = Var(model.R, model.A, model.G, domain=NonNegativeIntegers)
-        model.f_L, model.f_O = Var(model.G, model.T, domain=NonNegativeIntegers), Var(
-            model.G, model.T, domain=NonNegativeIntegers)
-        model.U, model.v = Var(model.R, model.A, domain=NonNegativeIntegers), Var(
-            model.R, model.A, model.P, domain=NonNegativeIntegers)
+        model.f_L = Var(model.G, model.T, domain=NonNegativeIntegers)
+        model.f_O = Var(model.G, model.T, domain=NonNegativeIntegers)
+        model.U = Var(model.R, model.A, domain=NonNegativeIntegers)
+        model.v = Var(model.R, model.A, model.P, domain=NonNegativeIntegers)
 
         # ----- Objective Function -----
         model.obj = Objective(sense=maximize, rule=lambda m:
