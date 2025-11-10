@@ -8,6 +8,8 @@ XXX | upXXXXXXXX
 Matheus Fernandes Vilhena Campinho | 202202004  
 Rui Rodrigues | up202105516
 
+---------------------------------------------------
+
 **Project Description**
 
 This repository contains the implementation of a **Simulated Annealing metaheuristic** to solve the problem of integrating **capacity** and **pricing** decisions for **car rental companies** (RManagt). The goal is to **maximize** the company's profitability, considering fleet sized and mix, acquisitions, removals, fleet deployment and repositioning, as well as pricing strategies for different rental requests.
