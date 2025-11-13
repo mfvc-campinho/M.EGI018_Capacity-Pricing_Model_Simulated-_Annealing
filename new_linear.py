@@ -3,16 +3,8 @@
 [M.EGI018] Operations Management Project
 
 CAR RENTAL FLEET MANAGEMENT - LINEAR MODEL SOLVER
+*** MODIFIED with correct leased fleet return logic ***
 
-Authors:
-- Daniel Pereira | up202107356
-- João Pedro de Lima Silveira | up202503099
-- XXX | upXXXXXXXX
-- Matheus Fernandes Vilhena Campinho | 202202004
-- Rui Rodrigues | up202105516
-
-Github Repository: 
-https://github.com/mfvc-campinho/M.EGI018_Capacity-Pricing_Model_Simulated_Annealing
 """
 
 # ==============================================================================
@@ -130,6 +122,14 @@ def solve_instance(filename):
         # Lookups
         rental_gr = {r: r_data[r, 4] - 1 for r in range(R)}
         INX_gs = {(g, s): 0.0 for g in range(G) for s in range(S)} # Initial number of owned (O) vehicles of group g located at s, at the beginning of the season (t = 0)
+        
+        # *** ADDING ONY and ONU parameters, defaulting to 0 ***
+        # These are missing from the script but present in the paper
+        ONY_gts = {(g, t, s, 'L'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)}
+        ONY_gts.update({(g, t, s, 'O'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)})
+        ONU_gts = {(g, t, s, 'L'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)}
+        ONU_gts.update({(g, t, s, 'O'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)})
+
 
         # =======================================
         # =================MODEL=================
@@ -183,29 +183,61 @@ def solve_instance(filename):
         # ----- Owned Fleet -----
         def stock_O(m, g, t, s):
             if t == 0:
+                # Eq. (5) from paper
                 return m.x_O[g, 0, s] == INX_gs[g, s] + m.w_O[g, s]
+            
+            # Eq. (2) from paper
             rin = sum(m.u_O[r, a, g] for r in m.R for a in m.A if r_data[r, 1] == s+1 and r_data[r, 3] == t)
             rout = sum(m.u_O[r, a, g] for r in m.R for a in m.A if r_data[r, 0] == s+1 and r_data[r, 2] == t)
             tin = sum(m.y_O[s2, s, g, t-TT_s1s2[s2, s]] for s2 in m.S if t-TT_s1s2[s2, s] in m.T_minus)
             tout = sum(m.y_O[s, s2, g, t] for s2 in m.S if t in m.T_minus)
-            return m.x_O[g, t, s] == m.x_O[g, t-1, s] + rin - rout + tin - tout
+            
+            # *** ADDED MISSING ONY/ONU TERMS from Eq. (2) ***
+            ony = ONY_gts[g, t, s, 'O']
+            onu = ONU_gts[g, t, s, 'O']
+            
+            return m.x_O[g, t, s] == m.x_O[g, t-1, s] + ony + onu + rin - rout + tin - tout
 
         model.c_stockO = Constraint(model.G, model.T, model.S, rule=stock_O)
 
-        # ----- Leased Fleet -----
+        # ==================================================================
+        # ========== MODIFIED LEASED FLEET LOGIC ===========================
+        # ==================================================================
+        
+        # ----- Leased Fleet (Corrected) -----
         def stock_L(m, g, t, s):
             if t == 0:
+                # Eq. (6) from paper
                 return m.x_L[g, 0, s] == 0
-            if t >= LP_g[g]:
-                return Constraint.Skip
+            
+            # Common terms for Eq. (3) and (4)
             rin = sum(m.u_L[r, a, g] for r in m.R for a in m.A if r_data[r, 1] == s+1 and r_data[r, 3] == t)
             rout = sum(m.u_L[r, a, g] for r in m.R for a in m.A if r_data[r, 0] == s+1 and r_data[r, 2] == t)
             tin = sum(m.y_L[s2, s, g, t-TT_s1s2[s2, s]] for s2 in m.S if t-TT_s1s2[s2, s] in m.T_minus)
             tout = sum(m.y_L[s, s2, g, t] for s2 in m.S if t in m.T_minus)
-            acq = m.w_L[g, t-1, s] if t-1 in m.T_minus else 0
-            return m.x_L[g, t, s] == m.x_L[g, t-1, s] + acq + rin - rout + tin - tout
+            acq = m.w_L[g, t-1, s] if (t-1) in m.T_minus else 0
+            
+            # *** ADDED MISSING ONY/ONU TERMS from Eq. (3) / (4) ***
+            ony = ONY_gts[g, t, s, 'L']
+            onu = ONU_gts[g, t, s, 'L']
+
+            if t <= LP_g[g]:
+                # This is Eq. (3) from the paper
+                return m.x_L[g, t, s] == (m.x_L[g, t-1, s] + ony + onu + acq 
+                                         + rin - rout + tin - tout)
+            else:
+                # This is Eq. (4) from the paper, with the return term
+                ret_index = t - LP_g[g] - 1
+                ret = m.w_L[g, ret_index, s] if ret_index in m.T_minus else 0
+                
+                return m.x_L[g, t, s] == (m.x_L[g, t-1, s] + ony + onu + acq - ret 
+                                         + rin - rout + tin - tout)
 
         model.c_stockL = Constraint(model.G, model.T, model.S, rule=stock_L)
+        
+        # ==================================================================
+        # ==================================================================
+        # ==================================================================
 
         model.c_cap = Constraint(model.G, model.T_minus, model.S, rule=lambda m, g, t, s:
                                  sum(m.u_L[r, a, g]+m.u_O[r, a, g] for r in m.R for a in m.A if r_data[r, 0] == s+1 and r_data[r, 2] == t) +
@@ -260,13 +292,13 @@ def solve_instance(filename):
 # ==============================================================================
 # BATCH LOOP
 # ==============================================================================
-# RESULTS_FILE = "BatchResults_2.xlsx"
+RESULTS_FILE = "NEW_BatchResults_Corrected.xlsx"
 results = []
 
 print("Starting batch run...")
 
 # CHANGE RANGE HERE: (1, 6) runs 1 to 5. Use (1, 41) for all 40.
-for i in range(1, 41):
+for i in range(1, 2):
     fname = f"data\Inst{i}.xlsx"
 
     # Solve
