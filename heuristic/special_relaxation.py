@@ -2,15 +2,10 @@
 """
 [M.EGI018] Operations Management Project
 
-CAR RENTAL FLEET MANAGEMENT - TIGHTENED LP (RELAXED) SOLVER
-*** MODIFIED with a TIGHTER demand constraint ***
+CAR RENTAL FLEET MANAGEMENT - SOS1 MILP (FIXED CAPACITY = 1)
+*** OPTION 2: Uses SOS1 Constraints for Pricing ***
+*** CAPACITY: Fixed to 1 for all units (No external heuristic) ***
 
-This script:
-1. Imports a capacity solution (w_O, w_L) from heuristic.py
-2. Fixes the w_O and w_L variables to those values.
-3. Relaxes ALL variables (including q, x, y, u, f) to continuous.
-4. USES A TIGHTER, WEIGHTED-AVERAGE DEMAND CONSTRAINT.
-5. Solves the resulting LP.
 """
 
 # ==============================================================================
@@ -21,24 +16,20 @@ import sys
 from pyomo.environ import *
 import pandas as pd
 import numpy as np
-from constructive_heuristic import ConstructiveHeuristic # <-- IMPORTING THE HEURISTIC CLASS
 
 # ==============================================================================
 # CORE SOLVING FUNCTION
 # ==============================================================================
 
-# Function to solve a single instance of the car rental problem
 def solve_instance(filename):
     print(f"\n{'='*60}")
-    print(f"PROCESSING TIGHT LP RELAXATION (FIXED HEURISTIC): {filename}")
+    print(f"PROCESSING SOS1 MILP (FIXED CAPACITY=1): {filename}")
     print(f"{'='*60}")
 
-    # Check if file exists
     if not os.path.exists(filename):
         print(f"ERROR: {filename} not found.")
-        return {'Instance': filename, 'Status': 'File Not Found', 'Objective': None, 'Gap': None}
+        return {'Instance': filename, 'Status': 'File Not Found'}
 
-    # Read Excel file
     try:
         xls = pd.ExcelFile(filename)
 
@@ -58,7 +49,7 @@ def solve_instance(filename):
         PYU = float(up_df.loc['PYU'].iloc[0])
         BUD = float(up_df.loc['BUD'].iloc[0])
 
-        # --- 2. Rental Types (Robust) ---
+        # --- 2. Rental Types ---
         rentals_df = pd.read_excel(xls, 'RentalTypes')
         r_pot = rentals_df.iloc[:, 1:6].apply(pd.to_numeric, errors='coerce').dropna(how='any')
         if len(r_pot) == 0:
@@ -93,12 +84,11 @@ def solve_instance(filename):
         DEM_rap = {(r, a, p): DEM_rap_arr[r, a, p] for r in range(R) for a in range(A+1) for p in range(P)}
         M_rap = {(r, a): np.max(DEM_rap_arr[r, a, :]) for r in range(R) for a in range(A+1)}
 
-        # --- 6. Upgrades ---
+        # --- 6. Upgrades & Transfers ---
         upg_data = get_clean_matrix('Upgrades')
         UPG_g1g2 = {(g1, g2): int(upg_data[g1, g2]) if upg_data.size >= G*G else (1 if g1 == g2 else 0)
                     for g1 in range(G) for g2 in range(G)}
 
-        # --- 7. Transfer Costs ---
         tc_data = get_clean_matrix('TransferCosts')
         TC_gs1s2 = {}
         if G == 1 and tc_data.shape >= (S, S):
@@ -109,13 +99,12 @@ def solve_instance(filename):
                 for s1 in range(S):
                     for s2 in range(S): TC_gs1s2[(g, s1, s2)] = 0.0
 
-        # --- 8. Transfer Times ---
         tt_data = get_clean_matrix('TransferTimes')
         TT_s1s2 = {(s1, s2): int(tt_data[s1, s2]) for s1 in range(S) for s2 in range(S)}
 
-        # --- 9. Lookups & Initial Conditions ---
         rental_gr = {r: r_data[r, 4] - 1 for r in range(R)}
         INX_gs = {(g, s): 0.0 for g in range(G) for s in range(S)}
+        
         ONY_gts = {(g, t, s, 'L'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)}
         ONY_gts.update({(g, t, s, 'O'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)})
         ONU_gts = {(g, t, s, 'L'): 0.0 for g in range(G) for t in range(T+1) for s in range(S)}
@@ -125,7 +114,8 @@ def solve_instance(filename):
         # =================MODEL=================
         # =======================================
         
-        print("\n*** RUNNING AS A PURE LP (ALL VARIABLES RELAXED) ***\n")
+        print("\n*** RUNNING WITH SOS1 CONSTRAINTS FOR PRICING ***")
+        print("*** FLEET FIXED TO 1 EVERYWHERE ***\n")
 
         model = ConcreteModel()
         model.G = RangeSet(0, G-1)
@@ -136,10 +126,14 @@ def solve_instance(filename):
         model.T = RangeSet(0, T)
         model.T_minus = RangeSet(0, T-1)
 
-        # ----- Decision Variables (RELAXED) -----
+        # ----- Decision Variables -----
         model.w_O = Var(model.G, model.S, domain=NonNegativeReals)
         model.w_L = Var(model.G, model.T_minus, model.S, domain=NonNegativeReals)
-        model.q = Var(model.R, model.A, model.P, domain=NonNegativeReals, bounds=(0, 1))
+        
+        # SOS SETUP: q is Continuous [0,1]
+        model.q = Var(model.R, model.A, model.P, domain=NonNegativeReals, bounds=(0,1))
+        
+        # Other variables relaxed
         model.x_L = Var(model.G, model.T, model.S, domain=NonNegativeReals)
         model.x_O = Var(model.G, model.T, model.S, domain=NonNegativeReals)
         model.y_L = Var(model.S, model.S, model.G, model.T_minus, domain=NonNegativeReals)
@@ -152,22 +146,22 @@ def solve_instance(filename):
         model.v = Var(model.R, model.A, model.P, domain=NonNegativeReals)
 
         # ==================================================================
-        # ========== FIXING CAPACITY FROM HEURISTIC ========================
+        # ========== FIXING CAPACITY TO 1 (MANUAL) =========================
         # ==================================================================
-        print("\n*** MODIFICATION: Generating and fixing capacity from external heuristic... ***")
-        heuristic = ConstructiveHeuristic()
-        w_O_fixed, w_L_fixed = heuristic.generate_solution(
-            G_set=model.G, 
-            S_set=model.S, 
-            T_minus_set=model.T_minus
-        )
-        print(f"Fixing {len(w_O_fixed)} w_O variables...")
-        for (g, s), val in w_O_fixed.items():
-            model.w_O[g, s].fix(val)
-        print(f"Fixing {len(w_L_fixed)} w_L variables...")
-        for (g, t, s), val in w_L_fixed.items():
-            model.w_L[g, t, s].fix(val)
-        print("*** Capacity variables w_O and w_L fixed from heuristic. ***\n")
+        print("Fixing all w_O and w_L variables to 1...")
+        
+        # Fix w_O to 1
+        for g in model.G:
+            for s in model.S:
+                model.w_O[g, s].fix(1.0)
+        
+        # Fix w_L to 1
+        for g in model.G:
+            for t in model.T_minus:
+                for s in model.S:
+                    model.w_L[g, t, s].fix(1.0)
+                    
+        print("Capacity fixed.")
         # ==================================================================
 
         # ----- Objective Function -----
@@ -180,28 +174,21 @@ def solve_instance(filename):
                                sum((m.u_L[r, a, g]+m.u_O[r, a, g])*PYU for g in m.G for r in m.R for a in m.A if rental_gr[r] != g)))
 
         # ----- Constraints -----
+        
+        # SOS1 Constraint: Only one price per rental request can be non-zero
+        model.sos_q = SOSConstraint(model.R, model.A, sos=1, 
+                                    rule=lambda m, r, a: [m.q[r, a, p] for p in m.P])
+
+        # Sum of prices = 1
+        model.c_price = Constraint(model.R, model.A, rule=lambda m, r, a: sum(m.q[r, a, p] for p in m.P) == 1)
+
+        # Linearization Constraints
         model.c1 = Constraint(model.R, model.A, rule=lambda m, r, a: m.U[r, a] == sum(m.u_L[r, a, g]+m.u_O[r, a, g] for g in m.G))
         model.c2 = Constraint(model.R, model.A, model.P, rule=lambda m, r, a, p: m.v[r, a, p] <= M_rap[r, a]*m.q[r, a, p])
         model.c3 = Constraint(model.R, model.A, model.P, rule=lambda m, r, a, p: m.v[r, a, p] <= m.U[r, a])
         model.c4 = Constraint(model.R, model.A, model.P, rule=lambda m, r, a, p: m.v[r, a, p] >= m.U[r, a] - M_rap[r, a]*(1-m.q[r, a, p]))
 
-        # ==================================================================
-        # ========== NEW TIGHTER DEMAND CONSTRAINT =========================
-        # ==================================================================
-        # We replace the original 'c_dem' with this tighter version.
-        # This links total fulfillment 'U' to the weighted average of demand.
-        
-        # model.c_dem = Constraint(model.R, model.A, model.P, rule=lambda m, r, a, p: sum(m.u_L[r, a, g]+m.u_O[r, a, g] for g in m.G) <= DEM_rap[r, a, p] + (1-m.q[r, a, p])*M_rap[r, a])
-        
-        def tight_demand_rule(m, r, a):
-            weighted_demand = sum(DEM_rap[r, a, p] * m.q[r, a, p] for p in m.P)
-            return m.U[r, a] <= weighted_demand
-            
-        model.c_dem_tight = Constraint(model.R, model.A, rule=tight_demand_rule)
-        
-        print("--- Using TIGHTER weighted-average demand constraint ---")
-        # ==================================================================
-
+        # Fleet Flow Constraints
         def stock_O(m, g, t, s):
             if t == 0:
                 return m.x_O[g, 0, s] == INX_gs[g, s] + m.w_O[g, s]
@@ -237,58 +224,56 @@ def solve_instance(filename):
         model.c_cap = Constraint(model.G, model.T_minus, model.S, rule=lambda m, g, t, s:
                                  sum(m.u_L[r, a, g]+m.u_O[r, a, g] for r in m.R for a in m.A if r_data[r, 0] == s+1 and r_data[r, 2] == t) +
                                  sum(m.y_L[s, s2, g, t]+m.y_O[s, s2, g, t] for s2 in m.S) <= m.x_L[g, t, s] + m.x_O[g, t, s])
-        # Note: Original c_dem is replaced by c_dem_tight
-        model.c_price = Constraint(model.R, model.A, rule=lambda m, r, a: sum(m.q[r, a, p] for p in m.P) == 1)
+        
+        model.c_dem = Constraint(model.R, model.A, model.P, rule=lambda m, r, a, p: sum(m.u_L[r, a, g]+m.u_O[r, a, g] for g in m.G) <= DEM_rap[r, a, p] + (1-m.q[r, a, p])*M_rap[r, a])
         model.c_bud = Constraint(rule=lambda m: sum(m.w_O[g, s]*COS_g[g] for g in m.G for s in m.S) <= BUD)
         model.c_upg = Constraint(model.R, model.A, model.G, rule=lambda m, r, a, g: m.u_L[r, a, g]+m.u_O[r, a, g] == 0 if UPG_g1g2.get((rental_gr[r], g), 0) == 0 and rental_gr[r] != g else Constraint.Skip)
         model.c_fL = Constraint(model.G, model.T, rule=lambda m, g, t: m.f_L[g, t] >= sum(m.x_L[g, t, s] for s in m.S) + sum(m.u_L[r, a, g] for r in m.R for a in m.A if r_data[r, 2] <= t < r_data[r, 3]))
         model.c_fO = Constraint(model.G, model.T, rule=lambda m, g, t: m.f_O[g, t] >= sum(m.x_O[g, t, s] for s in m.S) + sum(m.u_O[r, a, g] for r in m.R for a in m.A if r_data[r, 2] <= t < r_data[r, 3]))
 
         # =================SOLVE=================
-        print(f"\n[Gurobi Output for {filename} (LP, Fixed Fleet, Tight) follows...]")
+        print(f"\n[Gurobi Output for {filename} (SOS1, Fixed Ones) follows...]")
         opt = SolverFactory('gurobi')
         opt.options['TimeLimit'] = 600
+        opt.options['MIPGap'] = 0.02
         
-        res = opt.solve(model, tee=False) 
+        res = opt.solve(model, tee=True) 
 
         # Extract results
         stat = str(res.solver.termination_condition)
         try:
             obj_val = value(model.obj)
-            gap_str = "0.00%" # LPs don't have a MIP gap
+            try:
+                lb = res.problem.lower_bound
+                ub = res.problem.upper_bound
+                gap = abs((ub - lb) / lb) if lb > 1e-6 else 0.0
+                gap_str = f"{gap*100:.2f}%"
+            except:
+                gap_str = "0.00%" if stat == 'optimal' else "Unknown"
         except Exception as e:
             obj_val = "N/A"
             gap_str = "Error"
 
-        # Print summary
         print(f"\n>>> FINISHED {filename} | Obj: {obj_val} | Gap: {gap_str}")
         
-        # --- (Optional) Print some solution details ---
-        print("\n--- Sample LP Solution Results ---")
-        print("Owned Fleet (w_O[g,s]) - (FIXED):")
-        total_owned = 0
-        for g in model.G:
-            for s in model.S:
-                val = value(model.w_O[g, s])
-                total_owned += val
-        print(f"  Total Owned (Fixed): {total_owned:.0f}")
-
-        print("\nPricing (q[r,a,p]) - (Printing fractional values only):")
+        print("\n--- Checking SOS Pricing (q) ---")
         count_frac = 0
+        count_int = 0
         for r in model.R:
             for a in model.A:
                 for p in model.P:
                     val = value(model.q[r,a,p])
-                    if val > 0.01 and val < 0.99: # Print if fractional
-                        if count_frac < 15: # Limit printout
-                            print(f"  q[{r},{a},{p}] = {val:.2f}  <-- FRACTIONAL PRICE")
+                    if 0.01 < val < 0.99: 
                         count_frac += 1
-        if count_frac > 15:
-            print(f"  ...and {count_frac - 15} more fractional prices.")
-        elif count_frac == 0:
-            print("  All q values are 0 or 1 (or close to it).")
-        print("---------------------------------")
+                    elif val > 0.99:
+                        count_int += 1
         
+        print(f"  Clean Integer choices (1.0): {count_int}")
+        if count_frac > 0:
+            print(f"  WARNING: Found {count_frac} fractional q values.")
+        else:
+            print("  SUCCESS: All q values are integer. SOS worked perfectly.")
+
         return {'Instance': filename, 'Status': stat, 'Objective': obj_val, 'Gap': gap_str}
 
     except Exception as e:
@@ -299,27 +284,21 @@ def solve_instance(filename):
 # ==============================================================================
 # BATCH LOOP
 # ==============================================================================
-RESULTS_FILE = "LP_Tight_Fixed_Heuristic_Results.xlsx" # Changed output file name
+RESULTS_FILE = "SOS1_Fixed_Ones_Results.xlsx"
 results = []
 
-print("Starting batch run (LP Tight, Fixed Heuristic, Instance 1 only)...")
+print("Starting batch run (SOS1, Fixed Ones, Instance 1 only)...")
 
-# This loop runs ONLY for i=1
-for i in range(1, 2):
-    fname = r"data\Inst1.xlsx"
-
-    # Solve
+for i in range(40, 41): 
+    fname = r"data\Inst40.xlsx"
     res = solve_instance(fname)
     results.append(res)
 
-    # Save immediately after each instance
     try:
         df_current = pd.DataFrame(results)
         df_current.to_excel(RESULTS_FILE, index=False)
         print(f">>> RESULTS UPDATED in {RESULTS_FILE}")
     except PermissionError:
-        print(
-            f"\nWARNING: Could not save to {RESULTS_FILE}. Is it open in Excel?")
-        print("Continuing to next instance anyway...")
+        print(f"\nWARNING: Could not save to {RESULTS_FILE}. Is it open?")
 
 print("\nBatch run finished.")
