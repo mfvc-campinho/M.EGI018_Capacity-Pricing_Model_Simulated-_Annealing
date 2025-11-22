@@ -2,12 +2,13 @@
 """
 [M.EGI018] Operations Management Project
 
-SIMULATED ANNEALING (SA) - UTILIZATION GUIDED
----------------------------------------------
-- Logic: Uses feedback from the solver to guide moves.
-- "Add" moves target stations that hit 0 stock (Bottlenecks).
-- "Remove" moves target stations that never hit 0 stock (Waste).
-- Drastically reduces "blind" moves and infeasibility.
+SA - PRICING DRIVER (MIP EVALUATOR)
+-----------------------------------
+1. Search Space: Pricing Policy ONLY.
+2. Evaluator: Solves a MIP to find the Optimal Capacity & Flow for the given prices.
+   - Variables w_O, w_L (Capacity) are INTEGERS and optimized by Gurobi.
+   - Price is fixed via bounds on Sales variables (v).
+3. Initial Solution: Greedy Pricing (Max Potential Revenue).
 """
 # ==============================================================================
 import os
@@ -22,13 +23,14 @@ from pyomo.environ import *
 from pyomo.solvers.plugins.solvers.gurobi_direct import GurobiDirect
 
 # ==============================================================================
-# 1. DATA CLASS (Unchanged)
+# 1. DATA CLASS
 # ==============================================================================
 class InstanceData:
     def __init__(self, filename):
         print(f"Loading Instance Data from {filename}...")
         xls = pd.ExcelFile(filename)
-        def get_mat(sheet): return pd.read_excel(xls, sheet, header=None).apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(how='all', axis=1).values
+        def get_mat(sheet): 
+            return pd.read_excel(xls, sheet, header=None).apply(pd.to_numeric, errors='coerce').dropna(how='all').dropna(how='all', axis=1).values
 
         up = pd.read_excel(xls, 'UnitParameters', header=None, index_col=0)
         self.G = int(up.loc['G'].iloc[0]); self.S = int(up.loc['S'].iloc[0])
@@ -52,10 +54,9 @@ class InstanceData:
 
         dr = pd.read_excel(xls, 'Demand', header=None).values.flatten()
         dn = [x for x in dr if isinstance(x, (int, float)) and not np.isnan(x)]
-        self.DEM_rap = {}; self.M_rap = {}; self.demand_weights_gs = {}
+        self.DEM_rap = {}; self.M_rap = {}
         idx = 0; max_idx = len(dn)
         for r in range(self.R):
-            s_start = self.r_data[r, 0] - 1; g_req = self.rental_gr[r]
             for a in range(self.A + 1):
                 max_val = 0
                 for p in range(self.P):
@@ -64,11 +65,6 @@ class InstanceData:
                     if val > max_val: max_val = val
                     idx += 1
                 self.M_rap[(r, a)] = max_val
-                key = (g_req, s_start)
-                self.demand_weights_gs[key] = self.demand_weights_gs.get(key, 0) + max_val
-        self.gs_keys = list(self.demand_weights_gs.keys())
-        self.gs_vals = list(self.demand_weights_gs.values())
-        self.valid_weights = (sum(self.gs_vals) > 0)
 
         ud = get_mat('Upgrades')
         self.UPG_g1g2 = {}
@@ -82,11 +78,12 @@ class InstanceData:
         for s1 in range(self.S):
             for s2 in range(self.S):
                 self.TT_s1s2[(s1, s2)] = int(tt[s1, s2])
-                for g in range(self.G): self.TC_gs1s2[(g, s1, s2)] = float(tc[s1, s2]) if self.G==1 or tc.shape==(self.S,self.S) else 0.0
+                for g in range(self.G): 
+                    self.TC_gs1s2[(g, s1, s2)] = float(tc[s1, s2]) if self.G==1 or tc.shape==(self.S,self.S) else 0.0
         self.INX_gs = {(g, s): 0.0 for g in range(self.G) for s in range(self.S)}
 
 # ==============================================================================
-# 2. PERSISTENT EVALUATOR (With Utilization Feedback)
+# 2. PERSISTENT EVALUATOR (MIP)
 # ==============================================================================
 class PersistentEvaluator:
     def __init__(self, data):
@@ -97,8 +94,12 @@ class PersistentEvaluator:
         m.G = RangeSet(0, data.G-1); m.S = RangeSet(0, data.S-1); m.R = RangeSet(0, data.R-1)
         m.A = RangeSet(0, data.A); m.P = RangeSet(0, data.P-1); m.T = RangeSet(0, data.T); m.T_minus = RangeSet(0, data.T-1)
 
-        m.w_O = Var(m.G, m.S, domain=NonNegativeReals)
-        m.w_L = Var(m.G, m.T_minus, m.S, domain=NonNegativeReals)
+        # DECISION VARIABLES
+        # Capacity is Integer and OPTIMIZED by Gurobi
+        m.w_O = Var(m.G, m.S, domain=NonNegativeIntegers)
+        m.w_L = Var(m.G, m.T_minus, m.S, domain=NonNegativeIntegers)
+        
+        # Flow Variables (Relaxed)
         m.x_L = Var(m.G, m.T, m.S, domain=NonNegativeReals)
         m.x_O = Var(m.G, m.T, m.S, domain=NonNegativeReals)
         m.y_L = Var(m.S, m.S, m.G, m.T_minus, domain=NonNegativeReals)
@@ -110,6 +111,7 @@ class PersistentEvaluator:
         m.U = Var(m.R, m.A, domain=NonNegativeReals)
         m.v = Var(m.R, m.A, m.P, domain=NonNegativeReals)
 
+        # OBJECTIVE
         def obj_rule(mod):
             rev = sum(mod.v[r, a, p] * data.PRI_pg[p, data.rental_gr[r]] for r in mod.R for a in mod.A for p in mod.P)
             cost_buy = sum(mod.w_O[g, s]*data.COS_g[g] for g in mod.G for s in mod.S)
@@ -120,6 +122,7 @@ class PersistentEvaluator:
             return rev - cost_buy - cost_lease - cost_own - cost_trans - cost_upg
         m.obj = Objective(rule=obj_rule, sense=maximize)
 
+        # CONSTRAINTS
         m.c_U = Constraint(m.R, m.A, rule=lambda mod, r, a: mod.U[r, a] == sum(mod.v[r, a, p] for p in mod.P))
         m.c1 = Constraint(m.R, m.A, rule=lambda mod, r, a: mod.U[r, a] == sum(mod.u_L[r, a, g]+mod.u_O[r, a, g] for g in mod.G))
         
@@ -159,111 +162,48 @@ class PersistentEvaluator:
         self.opt = SolverFactory('gurobi_persistent')
         self.opt.set_instance(self.model)
         self.opt.options['OutputFlag'] = 0 
+        self.opt.options['MIPGap'] = 0.01
 
-    def update_and_solve(self, w_owned, w_leased, pricing_policy):
+    def solve_for_pricing(self, pricing_policy):
+        """
+        Updates the bounds on 'v' based on the pricing policy and solves the MIP.
+        """
         m = self.model
         data = self.data
 
-        # Update Capacity
-        for g in m.G:
-            for s in m.S:
-                val = w_owned.get((g,s), 0)
-                if m.w_O[g,s].value != val: m.w_O[g,s].fix(val); self.opt.update_var(m.w_O[g,s])
-        for g in m.G:
-            for t in m.T_minus:
-                for s in m.S:
-                    val = w_leased.get((g,t,s), 0)
-                    if m.w_L[g,t,s].value != val: m.w_L[g,t,s].fix(val); self.opt.update_var(m.w_L[g,t,s])
-        
-        # Update Pricing
+        # Update Pricing Logic (Bounds on v)
+        # Iterate through all Rental/Antecedence pairs
         for r in m.R:
             for a in m.A:
                 target = pricing_policy.get((r, a), -1)
                 for p in m.P:
+                    # If this price is chosen, UB = Demand. Else UB = 0.
                     ub = data.DEM_rap[r, a, p] if p == target else 0
-                    if m.v[r,a,p].ub != ub: m.v[r,a,p].setub(ub); self.opt.update_var(m.v[r,a,p])
+                    
+                    # Only update if changed to save time
+                    if m.v[r,a,p].ub != ub:
+                        m.v[r,a,p].setub(ub)
+                        self.opt.update_var(m.v[r,a,p])
 
         res = self.opt.solve(m, save_results=False, load_solutions=False)
+        
         if res.solver.termination_condition == TerminationCondition.optimal:
             self.opt.load_vars()
             
-            # --- ANALYSIS ---
-            # Find bottlenecks (stations with 0 stock at any time)
-            bottlenecks = []
+            # Extract optimal capacity for storage/analysis
+            current_owned = {}
             for g in m.G:
                 for s in m.S:
-                    # Check if stock dropped to 0 at any time t
-                    # To be fast, check t=0 or simple sum
-                    # Heuristic: If Owned Capacity is low but utilization high, mark as bottleneck
-                    # Just return the set of (g,s) keys
-                    pass # Logic implemented in perturb
+                    if value(m.w_O[g,s]) > 0.5:
+                        current_owned[(g,s)] = int(round(value(m.w_O[g,s])))
             
-            return value(m.obj)
-        return -1e9
-
-# ==============================================================================
-# 3. HEURISTICS & LOADERS
-# ==============================================================================
-def load_initial_capacity_from_excel(excel_path, sheet_owned, sheet_leased, data):
-    print(f"Loading Capacity from: {excel_path}")
-    if not os.path.exists(excel_path): 
-        print("File not found!"); return {}, {}
-        
-    try:
-        xls = pd.ExcelFile(excel_path)
-        
-        # --- Owned Capacity ---
-        df_o = pd.read_excel(xls, sheet_owned)
-        # Normalize columns: remove space, lowercase
-        df_o.columns = [c.strip().lower() for c in df_o.columns]
-        
-        # Determine key names based on what exists
-        col_qty = 'quantity' if 'quantity' in df_o.columns else 'w_owned'
-        col_grp = 'group' if 'group' in df_o.columns else 'g'
-        col_stn = 'station' if 'station' in df_o.columns else 's'
-        
-        w_owned = {}; current_cost = 0
-        for _, row in df_o.iterrows():
-            val = float(row[col_qty])
-            g = int(row[col_grp]) - 1
-            s = int(row[col_stn]) - 1
-            if val > 0: 
-                w_owned[(g, s)] = val
-                current_cost += val * data.COS_g[g]
-
-        # --- Leased Capacity ---
-        df_l = pd.read_excel(xls, sheet_leased)
-        df_l.columns = [c.strip().lower() for c in df_l.columns]
-        
-        col_qty_l = 'quantity' if 'quantity' in df_l.columns else 'w_leased'
-        col_grp_l = 'group' if 'group' in df_l.columns else 'g'
-        col_stn_l = 'station' if 'station' in df_l.columns else 's'
-        col_tim_l = 'time' if 'time' in df_l.columns else 't'
-        
-        w_leased = {}
-        for _, row in df_l.iterrows():
-            val = float(row[col_qty_l])
-            g = int(row[col_grp_l]) - 1
-            t = int(row[col_tim_l])
-            s = int(row[col_stn_l]) - 1
-            if val > 0: 
-                w_leased[(g, t, s)] = val
-        
-        # Budget Check
-        if current_cost > data.BUD:
-            scale = (data.BUD / current_cost) * 0.95
-            print(f"  >> Budget Exceeded ({current_cost:,.0f} > {data.BUD:,.0f}). Scaling by {scale:.4f}")
-            for k in w_owned: w_owned[k] = math.floor(w_owned[k] * scale)
+            return value(m.obj), current_owned
         else:
-            print(f"  >> Budget OK. ({current_cost:,.0f} / {data.BUD:,.0f})")
-            
-        return w_owned, w_leased
-    except Exception as e: 
-        print(f"Error loading Excel: {e}")
-        import traceback
-        traceback.print_exc()
-        return {}, {}
-    
+            return -1e9, {}
+
+# ==============================================================================
+# 3. HEURISTICS & NEIGHBORHOOD
+# ==============================================================================
 def generate_greedy_pricing(data):
     target_p = {}
     for r in range(data.R):
@@ -275,133 +215,105 @@ def generate_greedy_pricing(data):
             target_p[(r, a)] = best_p
     return target_p
 
-def perturb_capacity_guided(w_owned_in, w_leased_in, data, current_cost):
-    w_owned = copy.deepcopy(w_owned_in)
-    w_leased = copy.deepcopy(w_leased_in)
-    
-    # Check Budget Headroom
-    remaining_budget = data.BUD - current_cost
-    can_add = remaining_budget > 10000 # If we have money, prioritize adding
-    
-    roll = random.random()
-    
-    if can_add and roll < 0.6: # ADD MODE (60% chance if budget allows)
-        if data.gs_keys:
-            (g, s) = random.choices(data.gs_keys, weights=data.gs_vals, k=1)[0]
-            add_amt = random.randint(10, 50) # Moderate add
-            if random.random() < 0.5: w_owned[(g,s)] = w_owned.get((g,s),0) + add_amt
-            else: 
-                t = random.randint(0, data.T-1)
-                w_leased[(g,t,s)] = w_leased.get((g,t,s),0) + add_amt
-                
-    else: # REMOVE/SHAKE MODE
-        # Pick existing
-        if w_owned and random.random() < 0.5:
-            k = random.choice(list(w_owned.keys()))
-            rem_amt = max(1, int(w_owned[k] * 0.1))
-            w_owned[k] = max(0, w_owned[k] - rem_amt)
-            if w_owned[k] == 0: del w_owned[k]
-        elif w_leased:
-            k = random.choice(list(w_leased.keys()))
-            rem_amt = max(1, int(w_leased[k] * 0.1))
-            w_leased[k] = max(0, w_leased[k] - rem_amt)
-            if w_leased[k] == 0: del w_leased[k]
-            
-    return w_owned, w_leased
-
-def perturb_pricing(pricing_in, P_max, mutation_rate=0.01):
+def perturb_pricing(pricing_in, P_max, mutation_rate=0.02):
     pricing = copy.deepcopy(pricing_in)
-    num = max(1, int(len(pricing)*mutation_rate))
-    targets = random.sample(list(pricing.keys()), num)
-    for k in targets:
-        opts = list(range(P_max)); 
-        if pricing[k] in opts: opts.remove(pricing[k])
-        if opts: pricing[k] = random.choice(opts)
+    
+    # Bulk Mutation: Change 2% of rental types completely
+    keys = list(pricing.keys())
+    num_changes = max(1, int(len(keys) * mutation_rate))
+    targets = random.sample(keys, num_changes)
+    
+    for key in targets:
+        # Pick new random price
+        new_p = random.randint(0, P_max - 1)
+        pricing[key] = new_p
+            
     return pricing
 
-def calculate_cost(w_owned, data):
-    total = 0
-    for (g, s), val in w_owned.items():
-        total += val * data.COS_g[g]
-    return total
-
-def save_solution_to_excel(w_owned, w_leased, pricing, filename):
-    print(f"Saving best solution to {filename}...")
-    o_data = []; l_data = []; p_data = []
-    for (g, s), val in w_owned.items(): o_data.append({'Group': g+1, 'Station': s+1, 'Quantity': val})
-    for (g, t, s), val in w_leased.items(): l_data.append({'Group': g+1, 'Time': t, 'Station': s+1, 'Quantity': val})
-    for (r, a), p in pricing.items(): p_data.append({'RentalID': r, 'Antecedence': a, 'PriceLevel': p})
+def save_result(filename, w_owned_dict, pricing_dict):
+    print(f"Saving to {filename}...")
+    # Reconstruct Owned DataFrame
+    o_data = []
+    for (g, s), val in w_owned_dict.items():
+        o_data.append({'Group': g+1, 'Station': s+1, 'Quantity': val})
+    
+    # Reconstruct Pricing DataFrame
+    p_data = []
+    for (r, a), p in pricing_dict.items():
+        p_data.append({'RentalID': r, 'Antecedence': a, 'PriceLevel': p})
+        
     with pd.ExcelWriter(filename) as writer:
         pd.DataFrame(o_data).to_excel(writer, sheet_name='Owned_Capacity', index=False)
-        pd.DataFrame(l_data).to_excel(writer, sheet_name='Leased_Capacity', index=False)
         pd.DataFrame(p_data).to_excel(writer, sheet_name='Pricing_Policy', index=False)
 
 # ==============================================================================
-# 4. MAIN LOOP
+# 4. SA MAIN LOOP
 # ==============================================================================
-def run_sa_guided(instance, heuristic_file, sheet_o, sheet_l, max_seconds=120):
-    print(f"Running SA (Budget Guided) for {instance} (Limit: {max_seconds}s)")
+def run_sa_pricing_driven(instance, max_seconds=120):
+    print(f"Running SA (Pricing Driver) for {instance}")
+    
     data = InstanceData(instance)
     evaluator = PersistentEvaluator(data)
     
-    curr_w_o, curr_w_l = load_initial_capacity_from_excel(heuristic_file, sheet_o, sheet_l, data)
+    # 1. Initial Solution (Greedy Prices)
     curr_price = generate_greedy_pricing(data)
     
-    print("Evaluating Initial...")
-    curr_obj = evaluator.update_and_solve(curr_w_o, curr_w_l, curr_price)
-    curr_cost = calculate_cost(curr_w_o, data)
-    print(f"Initial Profit: {curr_obj:,.0f} (Cost: {curr_cost:,.0f}/{data.BUD:,.0f})")
+    print("Evaluating Initial Solution...")
+    # This solves the MIP for the first time to find optimal fleet for greedy prices
+    curr_obj, curr_w_o = evaluator.solve_for_pricing(curr_price)
+    print(f"Initial Profit: {curr_obj:,.0f}")
     
     best_obj = curr_obj
-    best_w_o = copy.deepcopy(curr_w_o); best_w_l = copy.deepcopy(curr_w_l); best_price = copy.deepcopy(curr_price)
+    best_price = copy.deepcopy(curr_price)
+    best_w_o = copy.deepcopy(curr_w_o)
     
-    T = 10000; alpha = 0.90; start_time = time.time(); total_iter = 0
+    # SA Params
+    T = 5000; alpha = 0.90; iters_per_T = 1
+    start_time = time.time()
+    total_iter = 0
     
-    print("\nIter  | Phase     | Temp       | New Obj         | Best Obj        | Cost Util% | Status")
-    print("-" * 100)
+    print("\nIter  | Temp       | New Obj         | Best Obj        | Eval(s)  | Status")
+    print("-" * 85)
     
     while (time.time() - start_time) < max_seconds:
         total_iter += 1
-        phase_name = "CAPACITY" if (total_iter // 50) % 2 == 0 else "PRICING"
         
-        if phase_name == "CAPACITY":
-            nw_o, nw_l = perturb_capacity_guided(curr_w_o, curr_w_l, data, curr_cost)
-            n_price = curr_price
-        else:
-            nw_o, nw_l = curr_w_o, curr_w_l
-            n_price = perturb_pricing(curr_price, data.P, 0.01)
-            
-        n_obj = evaluator.update_and_solve(nw_o, nw_l, n_price)
-        n_cost = calculate_cost(nw_o, data)
+        # 2. Perturb Pricing (Neighbor)
+        n_price = perturb_pricing(curr_price, data.P, mutation_rate=0.02)
         
+        t0 = time.time()
+        # 3. Solve MIP for new Pricing
+        n_obj, n_w_o = evaluator.solve_for_pricing(n_price)
+        t1 = time.time()
+        
+        # 4. Acceptance
         delta = n_obj - curr_obj
         accepted = False
-        if delta > 0: accepted = True
-        elif n_obj > -1e8: 
-            try: prob = math.exp(delta / T)
-            except: prob = 0
-            if random.random() < prob: accepted = True
-        
-        status_msg = ""
+        if delta > 0:
+            accepted = True
+        elif n_obj > -1e8:
+             try: prob = math.exp(delta / T)
+             except: prob = 0
+             if random.random() < prob: accepted = True
+             
+        status = "REJECTED"
         if accepted:
-            curr_w_o, curr_w_l, curr_price, curr_obj, curr_cost = nw_o, nw_l, n_price, n_obj, n_cost
-            status_msg = "ACCEPTED"
+            curr_price, curr_obj, curr_w_o = n_price, n_obj, n_w_o
+            status = "ACCEPTED"
             if curr_obj > best_obj:
-                best_obj, best_w_o, best_w_l, best_price = curr_obj, copy.deepcopy(curr_w_o), copy.deepcopy(curr_w_l), copy.deepcopy(curr_price)
-                status_msg = "NEW BEST"
+                best_obj, best_price, best_w_o = curr_obj, copy.deepcopy(curr_price), copy.deepcopy(curr_w_o)
+                status = "NEW BEST"
         
-        if total_iter % 1 == 0:
-            util = (curr_cost / data.BUD) * 100
-            print(f"{total_iter:<5} | {phase_name:<9} | {T:<10.2f} | {n_obj:<15,.0f} | {best_obj:<15,.0f} | {util:<6.1f}% | {status_msg}")
+        print(f"{total_iter:<5} | {T:<10.2f} | {n_obj:<15,.0f} | {best_obj:<15,.0f} | {t1-t0:<8.4f} | {status}")
         
-        if total_iter % 5 == 0: T *= alpha
-
-    print(f"\nTime Limit Reached. Best Profit: {best_obj:,.0f}")
-    save_solution_to_excel(best_w_o, best_w_l, best_price, "BestSolution_Inst41.xlsx")
+        T *= alpha
+        
+    print(f"\nFinal Best Profit: {best_obj:,.0f}")
+    save_result("BestSolution_Inst41_PricingSA.xlsx", best_w_o, best_price)
 
 if __name__ == "__main__":
     INSTANCE = r"data\Inst41.xlsx"
-    HEURISTIC_EXCEL = r"constructive_solutions/Solution_Inst41.xlsx"
-    if os.path.exists(INSTANCE) and os.path.exists(HEURISTIC_EXCEL):
-        run_sa_guided(INSTANCE, HEURISTIC_EXCEL, "Owned_Capacity", "Leased_Capacity", max_seconds=1200)
-    else: print("Error: Files not found.")
+    if os.path.exists(INSTANCE):
+        run_sa_pricing_driven(INSTANCE, max_seconds=1200)
+    else:
+        print("Instance not found.")
